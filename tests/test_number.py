@@ -217,3 +217,80 @@ async def test_set_value_with_fine_scaling():
         await number_set_value(entities[dp_id], call)
         device.set_dp.assert_called_once_with(raw, dp_id)
         assert type(device.set_dp.call_args.args[0]) is int
+
+
+# Entities 34 and 35 are generic, not from #861: limits that only fit with 3
+# decimals, and a coarse scaling whose offset has more decimals than it.
+CONFIG_PRECISION = {
+    DEVICE_NAME: {
+        **DEVICE_CONFIG,
+        "entities": [
+            *CONFIG_FINE_SCALING[DEVICE_NAME]["entities"],
+            {
+                "entity_category": "None",
+                "friendly_name": f"{PLATFORM_DOMAIN} 34",
+                "icon": "",
+                "id": "34",
+                "max_value": 2995,
+                "min_value": 1005,
+                "platform": PLATFORM_DOMAIN,
+                "scaling": 0.001,
+                "step_size": 1,
+            },
+            {
+                "entity_category": "None",
+                "friendly_name": f"{PLATFORM_DOMAIN} 35",
+                "icon": "",
+                "id": "35",
+                "max_value": 1000,
+                "min_value": 0,
+                "platform": PLATFORM_DOMAIN,
+                "scaling": 0.1,
+                "offset": 0.333,
+                "step_size": 1,
+            },
+            {
+                "entity_category": "None",
+                "friendly_name": f"{PLATFORM_DOMAIN} 36",
+                "icon": "",
+                "id": "36",
+                "max_value": 1000,
+                "min_value": 0,
+                "platform": PLATFORM_DOMAIN,
+                "scaling": 1 / 3,
+                "step_size": 1,
+            },
+        ],
+    }
+}
+
+
+async def test_value_precision_with_fine_scaling():
+    """Values and limits keep the decimals of the scaling, not just 2 (#861)."""
+    device = await init(CONFIG_PRECISION, PLATFORM_DOMAIN, LocalTuyaNumber)
+    entities = {e._dp_id: e for e in get_entites(device)}
+
+    # A raw 1234 with scaling 0.001 was shown as 1.23, although 1.234 is a
+    # valid value on the 0.001 step.
+    device.status_updated({"19": 1234, "21": 105, "34": 2995})
+    assert entities["19"].native_value == 1.234
+    assert entities["21"].native_value == 0.105
+    assert entities["34"].native_value == 2.995
+    assert entities["34"].native_min_value == 1.005
+    assert entities["34"].native_max_value == 2.995
+
+    # Coarser scalings, and no scaling, still round to 2 decimals as before.
+    device.status_updated({"30": 1234, "31": 1234, "32": 7, "33": 7})
+    assert entities["30"].native_value == 12.34
+    assert entities["31"].native_value == 123.4
+    assert entities["32"].native_value == 0.7
+    assert entities["33"].native_value == 7.5
+    # 0.7 + 0.333 still rounds to 2 decimals: only the scaling adds decimals.
+    device.status_updated({"35": 7})
+    assert entities["35"].native_value == 1.03
+    # A scaling typed as a long float (1/3) is capped at 10 decimals instead of
+    # showing float noise such as 84.66666666666666.
+    device.status_updated({"36": 254})
+    assert entities["36"].native_value == 84.6666666667
+    assert entities["30"].native_max_value == 10
+    assert entities["31"].native_max_value == 100

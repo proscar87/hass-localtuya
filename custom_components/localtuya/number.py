@@ -73,13 +73,21 @@ class LocalTuyaNumber(LocalTuyaEntity, NumberEntity):
         super().__init__(device, config_entry, sensorid, _LOGGER, **kwargs)
         self._state = STATE_UNKNOWN
 
-        self._min_value = self.scale(self._config.get(CONF_MIN_VALUE, DEFAULT_MIN))
-        self._max_value = self.scale(self._config.get(CONF_MAX_VALUE, DEFAULT_MAX))
+        # self.scale() rounds to 2 decimals, which shows e.g. a raw 1234 with
+        # scaling 0.001 as 1.23. Keep as many decimals as the scaling has, and
+        # never fewer than 2, so coarser scalings round exactly as before.
+        scale_factor = self._config.get(CONF_SCALING)
+        self._precision = 2
+        if scale_factor is not None:
+            places = -Decimal(str(scale_factor)).normalize().as_tuple().exponent
+            self._precision = max(2, min(places, 10))
+
+        self._min_value = self._scale(self._config.get(CONF_MIN_VALUE, DEFAULT_MIN))
+        self._max_value = self._scale(self._config.get(CONF_MAX_VALUE, DEFAULT_MAX))
         # Not self.scale(): it rounds to 2 decimals, which turns e.g. a step of
         # 1 with scaling 0.001 into 0. Multiply as decimals instead, so the
         # step keeps exactly the precision of step_size and scaling.
         step_size = self._config.get(CONF_STEPSIZE, DEFAULT_STEP)
-        scale_factor = self._config.get(CONF_SCALING)
         if scale_factor is not None and isinstance(step_size, (int, float)):
             step_size = float(Decimal(str(step_size)) * Decimal(str(scale_factor)))
         self._step_size = step_size
@@ -89,10 +97,20 @@ class LocalTuyaNumber(LocalTuyaEntity, NumberEntity):
         if default_value is not None:
             self._default_value = float(default_value)
 
+    def _scale(self, value):
+        """Scale like self.scale(), rounding to the scaling's decimals."""
+        if isinstance(value, (int, float)):
+            if (scale_factor := self._config.get(CONF_SCALING)) is not None:
+                value = value * scale_factor
+            if (offset := self._config.get(CONF_OFFSET)) is not None:
+                value = value + offset
+            value = round(value, self._precision)
+        return value
+
     @property
     def native_value(self) -> float:
         """Return sensor state."""
-        self._state = self.scale(self._state)
+        self._state = self._scale(self._state)
         return self._state
 
     @property
